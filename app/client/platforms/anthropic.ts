@@ -73,6 +73,10 @@ const ClaudeMapper = {
 
 const keys = ["claude-2, claude-instant-1"];
 
+// Claude 4 sub-variants with an extra build number (e.g. `claude-opus-4-1-...`)
+// currently reject requests that include both `temperature` and `top_p`.
+const CLAUDE_4_STRICT_SAMPLING_REGEX = /claude-(opus|sonnet)-4-\d+-/i;
+
 export class ClaudeApi implements LLMApi {
   speech(options: SpeechOptions): Promise<ArrayBuffer> {
     throw new Error("Method not implemented.");
@@ -185,11 +189,25 @@ export class ClaudeApi implements LLMApi {
 
       model: modelConfig.model,
       max_tokens: modelConfig.max_tokens,
-      temperature: modelConfig.temperature,
-      top_p: modelConfig.top_p,
       // top_k: modelConfig.top_k,
       top_k: 5,
     };
+
+    if (typeof modelConfig.temperature === "number") {
+      requestBody.temperature = modelConfig.temperature;
+    }
+
+    if (typeof modelConfig.top_p === "number") {
+      requestBody.top_p = modelConfig.top_p;
+    }
+
+    if (
+      CLAUDE_4_STRICT_SAMPLING_REGEX.test(modelConfig.model) &&
+      requestBody.temperature !== undefined &&
+      requestBody.top_p !== undefined
+    ) {
+      delete requestBody.top_p;
+    }
 
     const path = this.path(Anthropic.ChatPath);
 
@@ -224,7 +242,11 @@ export class ClaudeApi implements LLMApi {
           let chunkJson:
             | undefined
             | {
-                type: "content_block_delta" | "content_block_stop" | "message_delta" | "message_stop";
+                type:
+                  | "content_block_delta"
+                  | "content_block_stop"
+                  | "message_delta"
+                  | "message_stop";
                 content_block?: {
                   type: "tool_use";
                   id: string;
@@ -243,8 +265,11 @@ export class ClaudeApi implements LLMApi {
           // Handle refusal stop reason in message_delta
           if (chunkJson?.delta?.stop_reason === "refusal") {
             // Return a message to display to the user
-            const refusalMessage = "\n\n[Assistant refused to respond. Please modify your request and try again.]";
-            options.onError?.(new Error("Content policy violation: " + refusalMessage));
+            const refusalMessage =
+              "\n\n[Assistant refused to respond. Please modify your request and try again.]";
+            options.onError?.(
+              new Error("Content policy violation: " + refusalMessage),
+            );
             return refusalMessage;
           }
 
